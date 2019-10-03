@@ -1,0 +1,274 @@
+function New-DevopsProject {
+    [cmdletbinding()]
+   param(
+      [parameter(Mandatory = $true)]
+      [Alias('Name')]
+      [string] $ProjectName,
+
+      [string] $Description
+   )
+
+#create initial groups and sync to AAD
+
+Import-Module ActiveDirectory
+
+#create necessary groups
+$GroupTypes = "Project Administrators","Build Administrators","Valid Users","Contributors","Readers","Release Administrators"
+$projectadmins = "$projectname - Devops - Project Administrators"
+$buildadmins = "$projectname - Devops - Build Administrators"
+$Validusers = "$projectname - Devops - Valid Users"
+$Contributors = "$projectname - Devops - Project Contributors"
+$readers = "$projectname - Devops - Project Readers"
+$Releaseadmins = "$projectname - Devops - Release Administrators"
+New-ADGroup -Name "$projectadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
+new-adgroup -name "$buildadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
+New-ADGroup -Name "$Validusers" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
+New-ADGroup -Name "$Contributors" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
+New-ADGroup -Name "$readers" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
+New-ADGroup -Name "$Releaseadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
+sleep -Seconds 20
+$GroupsCreate = ("$projectadmins", "$buildadmins", "$Validusers", "$Contributors", "$readers", "$Releaseadmins")
+$groupscreated = foreach($group in $GroupsCreate){Get-ADGroup -identity $group}
+
+#force Dirsync and confirm Groups are created in AzureAD
+
+$ADConnectServer = "dirsync101.corp.athenahealth.com"
+$ADSyncSplat = @{
+       ComputerName = $ADConnectServer
+}
+#if a credential is needed you'll have to fill in $ADCred
+
+if($ADCred){
+       $ADSyncSplat.Add("Credential",$ADCred)}
+Invoke-Command @ADSyncSplat -ScriptBlock {
+       Import-Module ADSync
+       $null = Start-ADSyncSyncCycle -PolicyType Delta
+       
+       $runtime = 0
+       do {
+              Write-Verbose "AD sync is running, current run time: $runtime seconds" -Verbose
+              Start-Sleep -Seconds 1
+              $runtime = $runtime + 1
+       }
+       while ((Get-ADSyncScheduler | Select-Object -ExpandProperty SyncCycleInProgress) -eq "True")
+       Write-Verbose "AD sync completed." -Verbose
+}
+#Check for new groups in Azure AD
+Connect-AzAccount -Credential (get-credential)
+ForEach ($Group in $GroupsCreated)
+{
+       $Retry = 0
+       Do {
+              $Group.AzureGroupId = Get-AzADGroup -SearchString $Group.name -ErrorAction Stop | Select-Object -ExpandProperty Id
+              If (-not $Group.AzureGroupID)
+              {
+                     $Retry ++
+                     Write-Verbose "Unable to locate ""$($Group.name)"" in Azure AD for the $($Tenant.TenantName) tenant, waiting 60 seconds and try again.  Retry: $Retry"
+                     Start-Sleep -Seconds 60
+              }
+       } Until ($Group.AzureGroupId)
+}
+
+##Devops API calls for generating project and applying groups
+
+$pat = '24jtt46ipcvzkyglr2ywe5w4idk5inrh3yv6r7s4wkh64vujlmsq'
+$token = [system.convert]::ToBase64String([system.text.encoding]::ASCII.GetBytes(":$($pat)"))
+$header = @{
+    authorization = "Basic $token"
+    }
+
+
+$uri = "https://dev.azure.com/athenahealth/_apis/projects?api-version=5.1"
+$projecturi = "https://dev.azure.com/athenahealth/$projectname/_apis/git/repositories/$ProjectName/importRequests?api-version=5.1-preview"
+$projectrepouri = "https://dev.azure.com/athenahealth/$projectname/_apis/git/repositories?api-version=6.0-preview.1"
+$repopolicyconfig = "https://dev.azure.com/athenahealth/$projectname/_apis/policy/configurations?api-version=5.0"
+
+
+
+#create project
+
+write-verbose "creating project..."
+
+$Projectbody = '{
+    "name": "' + $ProjectName + '", 
+    "description": "' + $Description + '", 
+    "capabilities": {
+        "versioncontrol": { 
+            "sourceControlType": "Git"}, 
+        "processTemplate":{
+            "templateTypeId": "6b724908-ef14-45cf-84f8-768b5384da45"}
+        }
+    }'
+
+$createproject = Invoke-RestMethod -Uri $uri -Headers $header -method post -Body $projectbody -ContentType application/json 
+sleep -Seconds 5
+
+Write-Verbose "Creating null repo..."
+
+#create null repo
+
+$Repobody = '{
+    "parameters": {
+        "gitSource": {
+            "url": "https://github.com/davis61513/nullrepo.git"}
+        }
+    }'
+
+$createnullrepo = Invoke-RestMethod -uri $projecturi -Headers $header -Method post -body $Repobody -ContentType application/json
+sleep -Seconds 5
+
+#get repo id
+
+Write-Verbose "Getting REPO ID..."
+
+$repoid = invoke-restmethod -uri $projectrepouri -Headers $header 
+[string]$realid = $repoid.value.id
+
+
+#set approval policy
+
+Write-Verbose "Setting Approval policies on Repository..."
+
+$policybody = '{
+  "isEnabled": true,
+  "isBlocking": false,
+  "type": {
+    "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd"
+  },
+  "settings": {
+    "minimumApproverCount": 1,
+    "creatorVoteCounts": false,
+    "scope": [
+      {
+        "repositoryId": "' + $realid + '",
+        "refName": "refs/heads/master",
+        "matchKind": "exact"
+      }
+    ]
+  }
+}'
+
+$setpolicy = Invoke-RestMethod -uri $repopolicyconfig -Headers $header -Method Post -Body $policybody -ContentType application/json
+sleep -Seconds 5
+
+$approverguid = Get-AzADGroup -DisplayName $projectadmins
+[string]$appguid = $approverguid.id
+
+$approversbody = '{
+  "isEnabled": true,
+  "isBlocking": true,
+  "type": {
+    "id": "fd2167ab-b0be-447a-8ec8-39368250530e"
+  },
+  "settings": {
+    "requiredReviewerIds": [
+      "4a7f3061-9af2-4f2d-a31c-8d24b8c3abb7"
+    ],
+    "addedFilesOnly": false,
+   "scope": [
+      {
+        "repositoryId": "' + $realid + '",
+        "refName": "refs/heads/master",
+        "matchKind": "exact"
+      },
+      {
+        "repositoryId": "' + $realid + '",
+        "refName": "refs/heads/releases/",
+        "matchKind": "prefix"
+      }
+    ]
+  }
+}'
+#Write-Verbose "Setting approvers..."
+#$setapprovers = Invoke-RestMethod -uri $repopolicyconfig -Headers $header -Method Post -Body $approversbody -ContentType application/json
+#all after this may break function beaware!!!
+#goal here is to add an entitlement for a AAD group to a project
+$entitlementURI = "https://vsaex.dev.azure.com/athenahealth/_apis/groupentitlements?api-version=5.1-preview.1"
+
+#groups associated that will need entitlements
+$projectadmins = "$projectname - Devops - Project Administrators"
+$buildadmins = "$projectname - Devops - Build Administrators"
+$Validusers = "$projectname - Devops - Valid Users"
+$Contributors = "$projectname - Devops - Project Contributors"
+$readers = "$projectname - Devops - Project Readers"
+$Releaseadmins = "$projectname - Devops - Release Administrators"
+$groups2map = ("$projectadmins", "$Contributors", "$readers")
+
+$projectqueryURI = "https://dev.azure.com/athenahealth/_apis/projects?api-version=5.1"
+$projects = Invoke-RestMethod -Headers $header -uri $projectqueryURI
+
+#filter result of query for project that matches project name
+$projguid = @($projects.value) -match $projectname
+
+#actual guid of project
+$projguid.id
+$pguid = $projguid.id
+
+#loop for groups 2 map
+foreach($g2m in $groups2map){
+    $type = $g2m.split('-')[-1] -replace '\s',''
+
+
+#get azadgroup guid
+$targetadgroup = get-azadgroup -DisplayName "$g2m"
+$tg = $targetadgroup.id
+$entitlementbody = '{
+  
+  "group": {
+    "origin": "aad",
+    "originId": "' +$tg+ '",
+    "subjectKind": "group"
+  },
+  "id": null,
+  "licenseRule": {
+    "licensingSource": "account,",
+    "accountLicenseType": "express",
+    "licenseDisplayName": "Basic"
+  },
+  "projectEntitlements": [
+    {
+      "projectRef": {
+        "id": "743b363f-f826-4170-bec1-bc775409a7ea",
+        "name":"' +$projectname+ '"
+      },
+      "group": {
+        "groupType": "'+$type+'"
+      }
+    }
+  ]
+}'
+
+$addentitlement =  Invoke-RestMethod -Headers $header -uri $entitlementURI -Body $entitlementbody -Method Post -ContentType application/json
+
+
+#proj id 743b363f-f826-4170-bec1-bc775409a7ea
+sleep -Seconds 3
+
+$testid = Invoke-RestMethod -Headers $header -uri "https://vsaex.dev.azure.com/athenahealth/_apis/groupentitlements?api-version=5.1-preview.1" | select -ExpandProperty value
+
+#this should run a match and get specific ID
+
+$devopsguid = $testid | ? {$_.group.originid -match $tg}
+
+$updateuri = "https://vsaex.dev.azure.com/athenahealth/_apis/groupentitlements/$($Devopsguid.id)?api-version=5.1-preview.1"
+
+
+$updatebody = '[
+    {
+    "from": "",
+    "op": "add",
+    "path": "/projectEntitlements",
+    "value": {
+      "projectRef": {
+        "id": "'+$pguid+'"
+      },
+      "group": {
+        "groupType": "ProjectContributor"
+      }
+    }
+  }]'
+
+$actualupdate = Invoke-RestMethod -Headers $header -uri $updateuri -Body $updatebody -Method Patch -ContentType application/json-patch+json
+
+}
+}
