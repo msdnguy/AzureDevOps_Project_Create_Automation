@@ -1,3 +1,4 @@
+$organization = {your organization name}
 function New-DevopsProject {
     [cmdletbinding()]
    param(
@@ -80,14 +81,20 @@ $header = @{
     }
 
 
-$uri = "https://dev.azure.com/{yourorganization}/_apis/projects?api-version=5.1"
-$projecturi = "https://dev.azure.com/athenahealth/$projectname/_apis/git/repositories/$ProjectName/importRequests?api-version=5.1-preview"
-$projectrepouri = "https://dev.azure.com/athenahealth/$projectname/_apis/git/repositories?api-version=6.0-preview.1"
-$repopolicyconfig = "https://dev.azure.com/athenahealth/$projectname/_apis/policy/configurations?api-version=5.0"
+$uri = "https://dev.azure.com/$organization/_apis/projects?api-version=5.1"
+$projecturi = "https://dev.azure.com/$organization/$projectname/_apis/git/repositories/$ProjectName/importRequests?api-version=5.1-preview"
+$projectrepouri = "https://dev.azure.com/$organization/$projectname/_apis/git/repositories?api-version=6.0-preview.1"
+$repopolicyconfig = "https://dev.azure.com/$organization/$projectname/_apis/policy/configurations?api-version=5.0"
 
 
 
 #create project
+#the templateTypeId in this case maps to Scrum you can only create a project with default templates 
+# Agile templateTypeID is adcc42ab-9882-485e-a3ed-7678f01f66bc
+#Scrum templateTypeID is 6b724908-ef14-45cf-84f8-768b5384da45
+# Basic (a stripped down scrum template)  b8a3a935-7e91-48b8-a94c-606d37c3e9f2
+#CMMI is 27450541-8e31-4150-9947-dc59f998fc01
+# If you have an inherited process template you can query the type and apply the inherited template
 
 write-verbose "creating project..."
 
@@ -108,7 +115,7 @@ sleep -Seconds 5
 Write-Verbose "Creating null repo..."
 
 #create null repo
-
+# we are actually just cloning an empty repo from a public github repo.  you could point to any repo to act as a template with a readme file,etc.
 $Repobody = '{
     "parameters": {
         "gitSource": {
@@ -119,7 +126,7 @@ $Repobody = '{
 $createnullrepo = Invoke-RestMethod -uri $projecturi -Headers $header -Method post -body $Repobody -ContentType application/json
 sleep -Seconds 5
 
-#get repo id
+#get repo id- we need the repo ID to add the branch policy later
 
 Write-Verbose "Getting REPO ID..."
 
@@ -127,7 +134,7 @@ $repoid = invoke-restmethod -uri $projectrepouri -Headers $header
 [string]$realid = $repoid.value.id
 
 
-#set approval policy
+#set approval policy -first we set the minimum approvers and that approvers cannot approve their own pull request.
 
 Write-Verbose "Setting Approval policies on Repository..."
 
@@ -150,6 +157,8 @@ $policybody = '{
   }
 }'
 
+# we are now adding the required reviewers ID.  Note that the id under type must match the policy block.  In this case the id matches addinga reviewer ID
+# You cannot directly add an AAD identity here so instead we are using the pre-defined project admin group ID (4a7f3061-9af2-4f2d-a31c-8d24b8c3abb7)
 $setpolicy = Invoke-RestMethod -uri $repopolicyconfig -Headers $header -Method Post -Body $policybody -ContentType application/json
 sleep -Seconds 5
 
@@ -185,7 +194,7 @@ $approversbody = '{
 #$setapprovers = Invoke-RestMethod -uri $repopolicyconfig -Headers $header -Method Post -Body $approversbody -ContentType application/json
 #all after this may break function beaware!!!
 #goal here is to add an entitlement for a AAD group to a project
-$entitlementURI = "https://vsaex.dev.azure.com/athenahealth/_apis/groupentitlements?api-version=5.1-preview.1"
+$entitlementURI = "https://vsaex.dev.azure.com/$organization/_apis/groupentitlements?api-version=5.1-preview.1"
 
 #groups associated that will need entitlements
 $projectadmins = "$projectname - Devops - Project Administrators"
@@ -196,7 +205,7 @@ $readers = "$projectname - Devops - Project Readers"
 $Releaseadmins = "$projectname - Devops - Release Administrators"
 $groups2map = ("$projectadmins", "$Contributors", "$readers")
 
-$projectqueryURI = "https://dev.azure.com/athenahealth/_apis/projects?api-version=5.1"
+$projectqueryURI = "https://dev.azure.com/$organization/_apis/projects?api-version=5.1"
 $projects = Invoke-RestMethod -Headers $header -uri $projectqueryURI
 
 #filter result of query for project that matches project name
@@ -240,19 +249,20 @@ $entitlementbody = '{
   ]
 }'
 
+# To add users we use the entitlement api to create a group that maps to an AAD group and adds them to the project in the correct role based group.
 $addentitlement =  Invoke-RestMethod -Headers $header -uri $entitlementURI -Body $entitlementbody -Method Post -ContentType application/json
 
 
 #proj id 743b363f-f826-4170-bec1-bc775409a7ea
 sleep -Seconds 3
 
-$testid = Invoke-RestMethod -Headers $header -uri "https://vsaex.dev.azure.com/athenahealth/_apis/groupentitlements?api-version=5.1-preview.1" | select -ExpandProperty value
+$testid = Invoke-RestMethod -Headers $header -uri "https://vsaex.dev.azure.com/$organization/_apis/groupentitlements?api-version=5.1-preview.1" | select -ExpandProperty value
 
 #this should run a match and get specific ID
 
 $devopsguid = $testid | ? {$_.group.originid -match $tg}
 
-$updateuri = "https://vsaex.dev.azure.com/athenahealth/_apis/groupentitlements/$($Devopsguid.id)?api-version=5.1-preview.1"
+$updateuri = "https://vsaex.dev.azure.com/$organization/_apis/groupentitlements/$($Devopsguid.id)?api-version=5.1-preview.1"
 
 
 $updatebody = '[
