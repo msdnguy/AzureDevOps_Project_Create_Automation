@@ -2,21 +2,14 @@
 # Azure Pipelines: Automate the creation of Team Projects Securely by adding a default branch policy and approvers during creation.
 
 This repository contains sample project  demonstrating how to implement automated creation of a Team Project in an existing Azure DevOps Organization.  Additionally the project will initiallize a default repo, apply a branch policy on the master branch, add the project admininstrators as the auto populated approvers on a pull request.  Finally we add a group rule on the organization to map an AAD group to the project and role.
-## Available samples
 
-The following sample projects specify the main technologies used. A team that uses comparable tools and frameworks should be able to refer to the sample and update their existing tests to incorporate automated accessibility checks.
+We leverage the Azure DevOps REST APIs documented at https://docs.microsoft.com/en-us/rest/api/azure/devops/?view=azure-devops-rest-6.0
 
-* **[Sample 1: typescript-selenium-webdriver-sample](./typescript-selenium-webdriver-sample)**: 
-  * Useful for teams using Selenium and TypeScript/JavaScript. 
-  
-* **[Sample 2: CSharpSeleniumWebdriverSample](./csharp-selenium-webdriver-sample)**: 
-  * Useful for teams using Selenium and C#. 
+The powershell script leverages an OauthToken that must be created. Details on obtaining an Oauth token to use at https://docs.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/oauth
 
-*Are we missing a sample you'd like to see? [File a sample request](https://github.com/microsoft/axe-pipelines-samples/issues/new?assignees=&labels=sample_request&template=feature_request.md&title=Sample+Request%3A+%3Csample+name+here%3E) or [submit a pull request](./CONTRIBUTING.md)!*
+Details on using the token in a powershell script
+https://powershell.org/2019/04/azure-devops-enable-allow-scripts-to-access-the-oauth-token-using-powershell/
 
-## Disclaimer
-
-Automated accessibility tests can detect some common accessibility problems such as missing or invalid properties. But most accessibility problems can only be discovered through manual testing. We recommend [Accessibility Insights](https://accessibilityinsights.io/docs/en/web/overview), a free and open source dev tool that walks you though assessing a website for 100% [WCAG 2.0 AA](https://www.w3.org/WAI/WCAG21/quickref/?currentsidebar=%23col_overview&versions=2.0&levels=aaa) coverage.
 
 ## Contributing
 
