@@ -1,8 +1,7 @@
 
-# Axe + Azure Pipelines: Automate accessibility testing in your CI builds
+# Azure Pipelines: Automate the creation of Team Projects Securely by adding a default branch policy and approvers during creation.
 
-This repository contains sample projects (see next section [Available samples](#available-samples)) demonstrating how to implement automated accessibility testing in [Azure Pipelines](https://azure.microsoft.com/en-us/services/devops/pipelines/) builds using [axe-core](https://github.com/dequelabs/axe-core), the same accessibility scanning engine used in [Accessibility Insights for Web](https://accessibilityinsights.io/docs/en/web/overview).
-
+This repository contains sample project  demonstrating how to implement automated creation of a Team Project in an existing Azure DevOps Organization.  Additionally the project will initiallize a default repo, apply a branch policy on the master branch, add the project admininstrators as the auto populated approvers on a pull request.  Finally we add a group rule on the organization to map an AAD group to the project and role.
 ## Available samples
 
 The following sample projects specify the main technologies used. A team that uses comparable tools and frameworks should be able to refer to the sample and update their existing tests to incorporate automated accessibility checks.
