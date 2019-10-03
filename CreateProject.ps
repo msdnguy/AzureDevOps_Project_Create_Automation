@@ -8,7 +8,7 @@ function New-DevopsProject {
       [string] $Description
    )
 
-#create initial groups and sync to AAD
+#create initial groups and sync to AAD.  These groups will be used to map users to the project with correct permissions.  Project Admins are the only group allowed to approve PR to merge to master.
 
 Import-Module ActiveDirectory
 
@@ -26,7 +26,8 @@ New-ADGroup -Name "$Validusers" -GroupCategory Security -GroupScope Universal -p
 New-ADGroup -Name "$Contributors" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
 New-ADGroup -Name "$readers" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
 New-ADGroup -Name "$Releaseadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
-sleep -Seconds 20
+# Need to allow 20 seconds for group creation to complete.
+sleep -Seconds 20 
 $GroupsCreate = ("$projectadmins", "$buildadmins", "$Validusers", "$Contributors", "$readers", "$Releaseadmins")
 $groupscreated = foreach($group in $GroupsCreate){Get-ADGroup -identity $group}
 
@@ -40,6 +41,7 @@ $ADSyncSplat = @{
 
 if($ADCred){
        $ADSyncSplat.Add("Credential",$ADCred)}
+#The sync can take some time and vary greatly up to 2 minutes.
 Invoke-Command @ADSyncSplat -ScriptBlock {
        Import-Module ADSync
        $null = Start-ADSyncSyncCycle -PolicyType Delta
@@ -70,15 +72,15 @@ ForEach ($Group in $GroupsCreated)
 }
 
 ##Devops API calls for generating project and applying groups
-
-$pat = '24jtt46ipcvzkyglr2ywe5w4idk5inrh3yv6r7s4wkh64vujlmsq'
+#in this example the PAT token is in the script. This not secure.  Normally the token would be stored in a secret store like Azure Keyvault and pulled in dynamically.
+$pat = '{your PAT token here}'
 $token = [system.convert]::ToBase64String([system.text.encoding]::ASCII.GetBytes(":$($pat)"))
 $header = @{
     authorization = "Basic $token"
     }
 
 
-$uri = "https://dev.azure.com/athenahealth/_apis/projects?api-version=5.1"
+$uri = "https://dev.azure.com/{yourorganization}/_apis/projects?api-version=5.1"
 $projecturi = "https://dev.azure.com/athenahealth/$projectname/_apis/git/repositories/$ProjectName/importRequests?api-version=5.1-preview"
 $projectrepouri = "https://dev.azure.com/athenahealth/$projectname/_apis/git/repositories?api-version=6.0-preview.1"
 $repopolicyconfig = "https://dev.azure.com/athenahealth/$projectname/_apis/policy/configurations?api-version=5.0"
