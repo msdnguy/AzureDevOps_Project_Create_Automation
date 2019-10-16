@@ -5,7 +5,8 @@ function New-DevopsProject {
       [parameter(Mandatory = $true)]
       [Alias('Name')]
       [string] $ProjectName,
-
+      [paramter(Mandatory = $true)]
+      [string] $Requestor
       [string] $Description
    )
 
@@ -21,18 +22,22 @@ $Validusers = "$projectname - Devops - Valid Users"
 $Contributors = "$projectname - Devops - Project Contributors"
 $readers = "$projectname - Devops - Project Readers"
 $Releaseadmins = "$projectname - Devops - Release Administrators"
-New-ADGroup -Name "$projectadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
-new-adgroup -name "$buildadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
-New-ADGroup -Name "$Validusers" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
-New-ADGroup -Name "$Contributors" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
-New-ADGroup -Name "$readers" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
-New-ADGroup -Name "$Releaseadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com"
+New-ADGroup -Name "$projectadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com" -DisplayName $projectadmins -ManagedBy $requestor
+new-adgroup -name "$buildadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com" -DisplayName $buildadmins -ManagedBy $requestor
+New-ADGroup -Name "$Validusers" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com" -DisplayName $Validusers -ManagedBy $requestor
+New-ADGroup -Name "$Contributors" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com" -DisplayName $Contributors -ManagedBy $requestor
+New-ADGroup -Name "$readers" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com" -DisplayName $readers -ManagedBy $requestor
+New-ADGroup -Name "$Releaseadmins" -GroupCategory Security -GroupScope Universal -path "ou=CICD DevOps,ou=Security Groups,dc=corp,dc=athenahealth,dc=com" -DisplayName $Releaseadmins -ManagedBy $requestor"
+sleep -Seconds 10
+#this allows the requestor immediate access to the project admins group with the first Directory Sync
+$adminuser = get-aduser -identity $requestor | select -ExpandProperty distinguishedname
+Add-ADGroupMember -Identity $projectadmins -Members $adminuser
 # Need to allow 20 seconds for group creation to complete.
 sleep -Seconds 20 
 $GroupsCreate = ("$projectadmins", "$buildadmins", "$Validusers", "$Contributors", "$readers", "$Releaseadmins")
 $groupscreated = foreach($group in $GroupsCreate){Get-ADGroup -identity $group}
 
-#force Dirsync and confirm Groups are created in AzureAD
+#force Dirsync and confirm Groups are created in AzureAD please note this will require elevated permissions
 
 $ADConnectServer = "dirsync101.corp.athenahealth.com"
 $ADSyncSplat = @{
@@ -74,7 +79,7 @@ ForEach ($Group in $GroupsCreated)
 
 ##Devops API calls for generating project and applying groups
 #in this example the PAT token is in the script. This not secure.  Normally the token would be stored in a secret store like Azure Keyvault and pulled in dynamically.
-$pat = '{your PAT token here}'
+$pat = '{your PAT token here}' #
 $token = [system.convert]::ToBase64String([system.text.encoding]::ASCII.GetBytes(":$($pat)"))
 $header = @{
     authorization = "Basic $token"
@@ -119,7 +124,7 @@ Write-Verbose "Creating null repo..."
 $Repobody = '{
     "parameters": {
         "gitSource": {
-            "url": "https://github.com/davis61513/nullrepo.git"}
+            "url": ""} #provide path to a null repo here
         }
     }'
 
@@ -161,9 +166,16 @@ $policybody = '{
 # You cannot directly add an AAD identity here so instead we are using the pre-defined project admin group ID (4a7f3061-9af2-4f2d-a31c-8d24b8c3abb7)
 $setpolicy = Invoke-RestMethod -uri $repopolicyconfig -Headers $header -Method Post -Body $policybody -ContentType application/json
 sleep -Seconds 5
+#following block gets vstsid for admin group to set as required approver
+#get vsts groups
+$allgroups =Invoke-RestMethod -Headers $header -uri 'https://vssps.dev.azure.com/athenahealth/_apis/graph/groups?api-version=5.1-preview.1' 
+$vstsgroups = $allgroups.value
+$actualvsts = $vstsgroups | ? {$_.origin -like 'vsts'}
+$neededgroup = $actualvsts | ? {$_.principalname -like "*``[$($projectname)``]\Project Administrators"}
 
 $approverguid = Get-AzADGroup -DisplayName $projectadmins
 [string]$appguid = $approverguid.id
+#$appdevops = 
 
 $approversbody = '{
   "isEnabled": true,
@@ -173,10 +185,10 @@ $approversbody = '{
   },
   "settings": {
     "requiredReviewerIds": [
-      "4a7f3061-9af2-4f2d-a31c-8d24b8c3abb7"
+      "'+$neededgroup.originid+'"
     ],
     "addedFilesOnly": false,
-   "scope": [
+    "scope": [
       {
         "repositoryId": "' + $realid + '",
         "refName": "refs/heads/master",
@@ -191,8 +203,7 @@ $approversbody = '{
   }
 }'
 #Write-Verbose "Setting approvers..."
-#$setapprovers = Invoke-RestMethod -uri $repopolicyconfig -Headers $header -Method Post -Body $approversbody -ContentType application/json
-#all after this may break function beaware!!!
+$setapprovers = Invoke-RestMethod -uri $repopolicyconfig -Headers $header -Method Post -Body $approversbody -ContentType application/json#all after this may break function beaware!!!
 #goal here is to add an entitlement for a AAD group to a project
 $entitlementURI = "https://vsaex.dev.azure.com/$organization/_apis/groupentitlements?api-version=5.1-preview.1"
 
@@ -253,7 +264,7 @@ $entitlementbody = '{
 $addentitlement =  Invoke-RestMethod -Headers $header -uri $entitlementURI -Body $entitlementbody -Method Post -ContentType application/json
 
 
-#proj id 743b363f-f826-4170-bec1-bc775409a7ea
+
 sleep -Seconds 3
 
 $testid = Invoke-RestMethod -Headers $header -uri "https://vsaex.dev.azure.com/$organization/_apis/groupentitlements?api-version=5.1-preview.1" | select -ExpandProperty value
